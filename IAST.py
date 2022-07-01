@@ -5,7 +5,7 @@ Created on Thu Jun 23 15:02:29 2022
 @author: ARMAND Ivan
 """
 
-import pyiast #Fast IAST calculation
+import pyiast #Fast IAST calculation, published under MIT license
 import itertools #to concatenate lists of lists
 import numpy as np #dynamic lists
 import matplotlib.pyplot as plt #to plot curves
@@ -21,6 +21,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import warnings
 warnings.filterwarnings("ignore")
 abc=["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"]
+all_fitting_methods=["automatic","Langmuir", "Quadratic", "BET", "Henry","TemkinApprox","DSLangmuir","Interpolation"]
 def sort_Names(Names):
     """sort a list of the following form : [[index,str] for index in range(n)]"""
     s=[]
@@ -44,6 +45,8 @@ class Gas:
     """optional Gas(name = ..., number_of_isoT = ..., isoT = [isoT1,isoT2,...], composition=... (between 0 and 1 never 0, never 1)"""
     def __init__(self,**kwargs):
         self.isoT=[] ###contains (T,isoT_array) values
+        self.rmse=None
+        self.method="automatic"
         for key,value in kwargs.items():
             if key=="name":
                 self.name=value
@@ -54,6 +57,80 @@ class Gas:
             if key=="composition":
                 self.composition=value
     
+    def plot_gas_alone_isoT(self,number_of_points=200,T=293):
+        fig=Figure(figsize = (5, 5),dpi = 100)
+        fig.clear()
+        popup=tk.Tk()
+        popup.title("pure isotherm for "+self.get_name()+" at "+str(T)+"°K")
+        menubar = tk.Menu(popup)
+        popup.config(menu=menubar)
+        file_menu = tk.Menu(menubar,tearoff=False)
+        file_menu.add_command(label='Exit',command=popup.destroy)
+        menubar.add_cascade(label="File",menu=file_menu,underline=0)
+        self.set_model_isoT()
+        plotx = fig.add_subplot(111)
+        isoT=self.get_model_isoT()
+        pressure=np.linspace(isoT.df[isoT.pressure_key].min(),isoT.df[isoT.pressure_key].max(),number_of_points)
+        plotx.plot(pressure,isoT.loading(pressure))
+        plotx.scatter(isoT.df[isoT.pressure_key],isoT.df[isoT.loading_key])
+        #for error calculus :
+        X=isoT.df[isoT.pressure_key]
+        Y=isoT.df[isoT.loading_key]
+        Yf=isoT.loading(X)
+        Y,Yf=np.array(Y),np.array(Yf)
+        nsd=7
+        p=1
+        rmse_t=number_to_string(RMSE(Y,Yf), nsd)
+        R2_t=number_to_string(Coefficient_of_nondetermination(Y, Yf), nsd)
+        X2_t=number_to_string(chi_square(Y, Yf), nsd)
+        errsq_t=number_to_string(ERRSQ(Y, Yf), nsd)
+        easb_t=number_to_string(EASB(Y,Yf), nsd)
+        hybrid_t=number_to_string(HYBRID(Y,Yf,p), nsd)
+        mpsd_t=number_to_string(MPSD(Y,Yf,p), nsd)
+        are_t=number_to_string(ARE(Y,Yf), nsd)
+        Values=[rmse_t,R2_t,X2_t,errsq_t,easb_t,hybrid_t,mpsd_t,are_t]
+        error_button=tk.Button(master=popup,command=lambda:self.create_fitting_errors_table(Values, p),text="plot error table")
+        error_button.pack(side="top")
+        plotx.set_title("Pure isotherm of "+self.get_name()+" at "+str(T)+"°K using "+self.get_fitting_method()+" method")
+        plotx.set_xlabel("Pressure (bar)")
+        plotx.set_ylabel("Loading(mmol/g)")
+        canvas=FigureCanvasTkAgg(fig,master=popup)
+        canvas.get_tk_widget().pack(side=tk.RIGHT,fill=tk.BOTH,expand=tk.YES)
+        canvas.draw()
+        popup.mainloop()
+        
+        
+    def create_fitting_errors_table(self,Values,p):
+        """give the errors table for a fitting method"""
+        popup=tk.Tk()
+        popup.title(self.get_fitting_method()+" error table for "+self.get_name())
+        Functions=["RMSE","R²","X²","ERRSQ","EASB","HYBRID","MPSD","ARE"]
+        tableframe=tk.Frame(popup)
+        tableframe.pack(fill = tk.BOTH,expand=tk.YES)
+        scrollv = tk.Scrollbar(tableframe,orient="vertical")
+        scrollv.pack(side="right", fill="y")
+        scrollh = tk.Scrollbar(tableframe,orient='horizontal')
+        scrollh.pack(side="bottom", fill="x")
+        table=ttk.Treeview(tableframe,yscrollcommand=scrollv.set, xscrollcommand = scrollh.set)
+        table.column("#0", width=0,  stretch="no")
+        scrollv.config(command=table.yview)
+        scrollh.config(command=table.xview)
+        table["columns"]=("col1","col2")
+        table.column("col1",anchor="center",width=80)
+        table.heading("col1",text=self.get_fitting_method()+" error table for "+self.get_name(),anchor="center")
+        table.column("col2",anchor="center", width=80)
+        table.heading("col2",text="value",anchor="center")
+        for f in range(0,len(Functions)):
+            val=[Functions[f],Values[f]]
+            table.insert(parent='',index='end',iid=f,text='',values=tuple(val))
+        table.pack(fill = tk.BOTH,expand=tk.YES)
+        menubar = tk.Menu(popup)
+        popup.config(menu=menubar)
+        file_menu = tk.Menu(menubar,tearoff=False)
+        file_menu.add_command(label='Exit',command=popup.destroy)
+        menubar.add_cascade(label="File",menu=file_menu,underline=0)
+        popup.mainloop()
+        
     def set_name(self,name):
         self.name=name
     
@@ -68,27 +145,45 @@ class Gas:
     def set_composition(self,comp):
         self.composition=comp
     
+    def set_fitting_method(self,method):
+        self.method=method
+        
     def set_model_isoT(self):
         T,isoT_table=self.isoT[0]
         final_model="Langmuir"
         s=10
         pk="Relative Pressure (p/p°)"
         lk="Quantity Adsorbed (mmol/g)"
-        for M in ["Langmuir", "Quadratic", "BET", "Henry"]:
-            try:
-                model_isoT=pyiast.ModelIsotherm(isoT_table,
+        if self.method=="automatic":
+            for M in all_fitting_methods[1:-1]:
+                try:
+                    model_isoT=pyiast.ModelIsotherm(isoT_table,
+                                                        loading_key=lk,
+                                                        pressure_key=pk,
+                                                        model=M)
+                    if model_isoT.rmse<s:
+                        s=model_isoT.rmse
+                        final_model=M
+                    self.rmse=s
+                except:
+                    pass
+            self.model_isoT=pyiast.ModelIsotherm(isoT_table,
+                                                loading_key=lk,
+                                                pressure_key=pk,
+                                                model=final_model)
+            self.method=final_model
+        else:
+            if self.method=="Interpolation":
+                self.model_isoT=pyiast.InterpolatorIsotherm(isoT_table,
                                                     loading_key=lk,
                                                     pressure_key=pk,
-                                                    model=M)
-                if model_isoT.rmse<s:
-                    s=model_isoT.rmse
-                    final_model=M
-            except:
-                pass
-        self.model_isoT=pyiast.ModelIsotherm(isoT_table,
-                                            loading_key=lk,
-                                            pressure_key=pk,
-                                            model=final_model)
+                                                    fill_value=isoT_table[lk].max())
+            else:
+                self.model_isoT=pyiast.ModelIsotherm(isoT_table,
+                                                    loading_key=lk,
+                                                    pressure_key=pk,
+                                                    model=self.method)
+                
     def get_name(self):
         return self.name
     
@@ -104,16 +199,22 @@ class Gas:
     
     def get_model_isoT(self):
         return self.model_isoT
+    
+    def get_fitting_method(self):
+        return self.method
+    
 class IAST:
     def __init__(self):
         self.number_of_datas_entered=0
+        self.Px=0.001
+        self.Py=10
+        self.number_iast_points=100
         self.root = tk.Tk()
         self.root.title('IAST calculus')
         self.root.geometry('600x400+50+50')
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
         file_menu = tk.Menu(menubar,tearoff=False)
-        file_menu.add_command(label='new',command=IAST)
         file_menu.add_command(label='Reset all',command=lambda:[self.root.destroy(),IAST()])
         file_menu.add_separator()
         file_menu.add_command(label='Exit',command=self.root.destroy)
@@ -194,8 +295,26 @@ class IAST:
             
     def ask_composition_Frame(self):
         composition_frame=tk.Frame(master=self.graph)
+        pressure_range_frame=tk.Frame(master=composition_frame)
+        tk.Label(pressure_range_frame,text="Pressure ∈ [").pack(side="left")
+        self.px=tk.StringVar()
+        self.py=tk.StringVar()
+        self.number_points=tk.StringVar()
+        px_entry=tk.Entry(pressure_range_frame,textvariable=self.px)
+        px_entry.insert(0,0)
+        px_entry.pack(side="left")
+        tk.Label(pressure_range_frame,text=";").pack(side="left")
+        py_entry=tk.Entry(pressure_range_frame,textvariable=self.py)
+        py_entry.insert(0,1)
+        py_entry.pack(side="left")
+        tk.Label(pressure_range_frame,text="] bar !!!, number of points =").pack(side="left")
+        number_points_entry=tk.Entry(pressure_range_frame,textvariable=self.number_points)
+        number_points_entry.insert(0,100)
+        number_points_entry.pack(side="left")
+        pressure_range_frame.pack()
         tk.Label(composition_frame,text="composition ratio (between 0 and 1)").pack()
         self.compositions_entries=[]
+        self.fitting_methods_entries=[]
         for i in range(len(self.gases)):
             composition_gas_i_frame=tk.Frame(master=composition_frame)
             tk.Label(composition_gas_i_frame,text=self.gases[i].get_name()).pack(side="left")
@@ -206,6 +325,13 @@ class IAST:
             entry_composition_of_gas_i.pack(side="left")
             calculate_IAST_for_gas_i=tk.Button(master=composition_gas_i_frame,command=lambda i=i:[self.read_composition_of_all_gases(),self.calculate_IAST_for_gas_i(i)],text="plot iast of "+self.gases[i].get_name())
             calculate_IAST_for_gas_i.pack(side="left")
+            select_method=ttk.Combobox(composition_gas_i_frame,values=all_fitting_methods)
+            select_method.current(0)
+            select_method.pack(side="left")
+            self.fitting_methods_entries.append(select_method)
+            pure_isoT_fitting=tk.Button(master=composition_gas_i_frame,command=lambda i=i:[self.read_composition_of_all_gases(),
+            self.gases[i].plot_gas_alone_isoT(self.number_iast_points)],text="plot pure isotherm")
+            pure_isoT_fitting.pack()
             composition_gas_i_frame.pack()
         calculate_IAST_for_every_gas=tk.Button(master=composition_frame,command=lambda:[self.read_composition_of_all_gases(),self.calculate_IAST_for_every_gas()],text="plot iast of every gas")
         calculate_IAST_for_every_gas.pack()
@@ -215,15 +341,19 @@ class IAST:
     def read_composition_of_all_gases(self):
         for i in range(len(self.compositions_entries)):
             self.gases[i].set_composition(float(self.compositions_entries[i].get().replace(',','.')))
+            self.gases[i].set_fitting_method(self.fitting_methods_entries[i].get())
     
     def calculate_IAST_for_gas_i(self,i):
+        self.Px=float(self.px.get())
+        self.Py=float(self.py.get())
+        self.number_iast_points=int(self.number_points.get())
         y=[]
         for k in range(len(self.gases)):
             y.append(self.gases[k].get_composition())
             self.gases[k].set_model_isoT()
         y=np.array(y)
         T,isoT_table=self.gases[i].get_isoT()[0]
-        X=np.linspace(0.001,10,100)
+        X=np.linspace(self.Px,self.Py,self.number_iast_points)
         all_model_isotherm=[self.gases[k].get_model_isoT() for k in range(len(self.gases))]
         Y=[]
         for total_pressure in X:
@@ -234,13 +364,17 @@ class IAST:
         self.plot_gas_i(X,Yi,self.gases[i].get_name())
     
     def calculate_IAST_for_every_gas(self):
+        self.Px=float(self.px.get())
+        self.Py=float(self.py.get())
+        self.number_iast_points=int(self.number_points.get())
         y=[]
         for k in range(len(self.gases)):
-            y.append(self.gases[k].get_composition())
-            self.gases[k].set_model_isoT()
+            if self.gases[k].get_composition()!=0:
+                y.append(self.gases[k].get_composition())
+                self.gases[k].set_model_isoT()
         y=np.array(y)
-        X=np.linspace(0.001,10,100)
-        all_model_isotherm=[self.gases[k].get_model_isoT() for k in range(len(self.gases))]
+        X=np.linspace(self.Px,self.Py,self.number_iast_points)
+        all_model_isotherm=[self.gases[k].get_model_isoT() for k in range(len(self.gases)) if self.gases[k].get_composition()!=0]
         Y=[]
         for total_pressure in X:
             q = pyiast.iast(total_pressure * y, all_model_isotherm)
@@ -258,7 +392,7 @@ class IAST:
         file_menu.add_command(label='Exit',command=popup.destroy)
         menubar.add_cascade(label="File",menu=file_menu,underline=0)
         plotx = fig.add_subplot(111)
-        plotx.set_title("Isotherm of "+name_of_gas_i+" at "+str(T)+"°K in the gas mixture")
+        plotx.set_title("Isotherm for "+name_of_gas_i+" at "+str(T)+"°K in the gas mixture")
         plotx.set_xlabel("Pressure (bar)")
         plotx.set_ylabel("Loading(mmol/g)")
         plotx.plot(X,Y)
@@ -283,7 +417,7 @@ class IAST:
         plotx.set_xlabel("Pressure (bar)")
         plotx.set_ylabel("Loading(mmol/g)")
         plotx.plot(X,Y)
-        plotx.legend([g.get_name() for g in self.gases])
+        plotx.legend([g.get_name() for g in self.gases if g.get_composition()!=0])
         canvas=FigureCanvasTkAgg(fig,master=popup)
         canvas.get_tk_widget().pack(side=tk.RIGHT,fill=tk.BOTH,expand=tk.YES)
         canvas.draw()
@@ -320,7 +454,7 @@ class IAST:
             'categories': '=Sheet1!$A$2:$A$'+str(len(X)+1),
             'values':     '=Sheet1!$B$2:$B$'+str(len(Y)+1),
         })
-            chart.set_x_axis({'name': 'Pressure(bar)"'})
+            chart.set_x_axis({'name': 'Pressure(bar)'})
             chart.set_y_axis({'name': 'Loading(mmol/g)','major_gridlines': {'visible': False}})
             worksheet.insert_chart('F2', chart)
             workbook.close()
@@ -418,4 +552,63 @@ class IAST:
             tk.Label(lframe, text = Text[line],anchor="w").pack(side="right")
             lframe.pack()
         popup.mainloop()
+        
+def RMSE(Observed,Calculated):
+    """Root mean square errors"""
+    return np.sqrt(np.mean((Observed-Calculated)**2))
+
+def chi_square(Observed,Calculated):
+    s=0
+    for i in range(len(Observed)):
+        s+=((Calculated[i]-Observed[i])**2)/Observed[i]
+    return s
+
+def Coefficient_of_nondetermination(Observed,Calculated):
+    s1,s2=0,0
+    qmobs=np.mean(Observed)
+    for i in range(len(Observed)):
+        s1+=(Calculated[i]-Observed[i])**2
+        s2+=(Calculated[i]-Observed[i])**2+(Calculated[i]-qmobs)**2
+    return 1-s1/s2
+
+def ERRSQ(Observed,Calculated):
+    """Sum square of errors"""
+    s=0
+    for i in range(len(Observed)):
+        s+=(Observed[i]-Calculated[i])**2
+    return s
+
+def EASB(Observed,Calculated):
+    """Sum of absolute errors"""
+    s=0
+    for i in range(len(Observed)):
+        s+=abs(Observed[i]-Calculated[i])
+    return s
+
+def HYBRID(Observed,Calculated,p):
+    """Hybrid fractional error function, p=number of parameters of the fit function"""
+    s=0
+    for i in range(len(Observed)):
+        s+=((Calculated[i]-Observed[i])**2)/Observed[i]
+    return 100*s/(len(Observed)-p)
+
+def MPSD(Observed,Calculated,p):
+    """Marquardt’s Percent Standard Deviation"""
+    s=0
+    for i in range(len(Observed)):
+        s+=((Calculated[i]-Observed[i])**2)/Observed[i]
+    return (s/(len(Observed)-p))**0.5
+
+def ARE(Observed,Calculated):
+    """Average Relative Error"""
+    s=0
+    for i in range(len(Observed)):
+        s+=(Calculated[i]-Observed[i])/Observed[i]
+    return 100*s/len(Observed)
+
+def number_to_string(value,nsd):
+    """convert the number to string with nsd as number of significant digits"""
+    return str(("{:."+str(nsd)+"f}").format(round(value,nsd)))
+
+
 IAST()
