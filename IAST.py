@@ -18,6 +18,8 @@ import pandas as pd #to read xlsx and clipboard
 import xlsxwriter
 from matplotlib.figure import Figure #to draw figures on tkinter frame
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from labellines import labelLine, labelLines
+import webbrowser
 import warnings
 warnings.filterwarnings("ignore")
 abc=["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"]
@@ -379,7 +381,8 @@ class IAST:
         for total_pressure in X:
             q = pyiast.iast(total_pressure * y, all_model_isotherm)
             Y.append(q)
-        self.plot_every_gas(X,Y)
+        # self.plot_every_gas(X,Y)
+        self.plot_selectivities(X, Y)
         
     def plot_gas_i(self,X,Y, name_of_gas_i,T=293):
         fig=Figure(figsize = (5, 5),dpi = 100)
@@ -423,6 +426,38 @@ class IAST:
         canvas.draw()
         popup.mainloop()
     
+    def plot_selectivities(self,X,Y,T=293):
+        Compositions=[self.gases[i].get_composition() for i in range(len(self.gases))]
+        fig=Figure(figsize = (5, 5),dpi = 100)
+        fig.clear()
+        popup=tk.Tk()
+        menubar = tk.Menu(popup)
+        popup.config(menu=menubar)
+        file_menu = tk.Menu(menubar,tearoff=False)
+        file_menu.add_command(label="save datas (png and xlsx)",command=lambda:self.save_plot_selectivities(X,Y,Compositions,T))
+        file_menu.add_command(label='Exit',command=popup.destroy)
+        menubar.add_cascade(label="File",menu=file_menu,underline=0)
+        plotx = fig.add_subplot(111)
+        plotx.set_title("Selectivities at "+str(T)+"°K in the gas mixture depending of the pressure of the mixture")
+        plotx.set_xlabel("Pressure (bar)")
+        plotx.set_ylabel("Selectivity")
+        # plotx.plot(X,Y) #here are the isotherms
+        leg=[g.get_name() for g in self.gases if g.get_composition()!=0]
+        leg=[]
+        for g1 in range(len(self.gases)):
+            for g2 in range(g1,len(self.gases)):
+                if g2!=g1:
+                    Y1=np.array([j[g1] for j in Y])
+                    Y2=np.array([j[g2] for j in Y])
+                    S=(Y1/Y2)*self.gases[g2].get_composition()/self.gases[g1].get_composition()
+                    plotx.plot(X,S)
+                    leg.append("Selectivity of "+self.gases[g1].name+"/"+self.gases[g2].name)
+        plotx.legend(leg)
+        canvas=FigureCanvasTkAgg(fig,master=popup)
+        canvas.get_tk_widget().pack(side=tk.RIGHT,fill=tk.BOTH,expand=tk.YES)
+        canvas.draw()
+        popup.mainloop()
+        
     def save_plot(self,X,Y,name_of_gas_i,T=293):
         plt.clf()
         plt.title("Isotherm of "+name_of_gas_i+" at "+str(T)+"°K in the gas mixture")
@@ -468,6 +503,8 @@ class IAST:
         plt.ylabel("Loading(mmol/g)")
         plt.plot(X,Y)
         plt.legend([g.get_name() for g in self.gases])
+        which_gases_are_used=[self.gases[i] for i in range(len(self.gases)) if Compositions[i]!=0]
+        Compositions_bis=[Compositions[i] for i in range(len(Compositions)) if Compositions[i]!=0]
         try:
             foldername=filedialog.askdirectory()
             plt.savefig(foldername+"/isotherm of every gas in the mixture.png")
@@ -479,16 +516,16 @@ class IAST:
             X,Y=np.array(X),np.array(Y)
             worksheet.write(0,0,"gas")
             worksheet.write(1,0,"ratio in the mixture (between 0 and 1)")
-            for i in range(len(self.gases)):
+            for i in range(len(which_gases_are_used)):
                 worksheet.write(2,2*i+1,"Pressure(bar)")
                 worksheet.write(2,2*i+2,"Loading(mmol/g)")
-                worksheet.write(0,2*i+1,self.gases[i].get_name())
-                worksheet.write(1,2*i+1,Compositions[i])
+                worksheet.write(0,2*i+1,which_gases_are_used[i].get_name())
+                worksheet.write(1,2*i+1,Compositions_bis[i])
                 for j in range(len(X)):
                     worksheet.write(j+3,2*i+1,"="+str(X[j]))
                     worksheet.write(j+3,2*i+2,"="+str(Y[j][i]))
             chart = workbook.add_chart({'type': 'line'})
-            for i in range(len(self.gases)):
+            for i in range(len(which_gases_are_used)):
                 letterA=abc[2*i+1]
                 letterB=abc[2*i+2]
                 letterA=""
@@ -501,7 +538,7 @@ class IAST:
                     letterB+=abc[(2*k+2)%26]
                     j-=26
                 chart.add_series({
-                'name': "isotherm of "+self.gases[i].get_name()+" in the mixture",
+                'name': "isotherm of "+which_gases_are_used[i].get_name()+" in the mixture",
                 'categories': "=Sheet1!$"+letterA+"$4:$"+letterA+"$"+str(len(X)+3),
                 'values':     "=Sheet1!$"+letterB+"$4:$"+letterB+"$"+str(len(X)+3),
             })
@@ -512,6 +549,75 @@ class IAST:
         except:
             pass
     
+    def save_plot_selectivities(self,X,Y,Compositions,T=293):
+        plt.clf()
+        plt.title("Isotherm of every gas at "+str(T)+"°K in the gas mixture")
+        plt.xlabel("Pressure (bar)")
+        plt.ylabel("Loading(mmol/g)")
+        #plt.plot(X,Y)
+        leg=[g.get_name() for g in self.gases]
+        leg=[]
+        Stot=[]
+        S_variable=[]
+        for g1 in range(len(self.gases)):
+            for g2 in range(g1,len(self.gases)):
+                if g2!=g1:
+                    Y1=np.array([j[g1] for j in Y])
+                    Y2=np.array([j[g2] for j in Y])
+                    S=(Y1/Y2)*self.gases[g2].get_composition()/self.gases[g1].get_composition()
+                    Stot.append(S)
+                    plt.plot(X,S)
+                    leg.append("Selectivity of "+self.gases[g1].name+"/"+self.gases[g2].name)
+                    S_variable.append(self.gases[g1].name+"/"+self.gases[g2].name)
+        plt.legend(leg)
+        which_gases_are_used=[self.gases[i] for i in range(len(self.gases)) if Compositions[i]!=0]
+        Compositions_bis=[Compositions[i] for i in range(len(Compositions)) if Compositions[i]!=0]
+        try:
+            foldername=filedialog.askdirectory()
+            plt.savefig(foldername+"/Selectivities for every gas in the mixture.png")
+            df=pd.DataFrame()
+            writer=pd.ExcelWriter(foldername+"/Selectivities for every gas in the mixture.xlsx",engine="xlsxwriter")
+            df.to_excel(writer,sheet_name="Sheet1")
+            workbook=writer.book
+            worksheet=writer.sheets["Sheet1"]
+            X,Y=np.array(X),np.array(Y)
+            worksheet.write(0,0,"gas")
+            worksheet.write(1,0,"ratio in the mixture (between 0 and 1)")
+            for i in range(len(which_gases_are_used)):
+                
+                worksheet.write(0,2*i+1,which_gases_are_used[i].get_name())
+                worksheet.write(1,2*i+1,Compositions_bis[i])
+            for i in range(len(Stot)):
+                worksheet.write(2,2*i+1,"P(bar)")
+                worksheet.write(2,2*i+2,S_variable[i])
+                for j in range(1,len(X)):
+                    worksheet.write(j+3,2*i+1,"="+str(X[j]))
+                    worksheet.write(j+3,2*i+2,"="+str(Stot[i][j]))
+            chart = workbook.add_chart({'type': 'line'})
+            for i in range(len(Stot)):
+                letterA=abc[2*i+1]
+                letterB=abc[2*i+2]
+                letterA=""
+                letterB=""
+                k,j=i,i
+                while 2*k+1>-1:
+                    letterA+=abc[(2*k+1)%26]
+                    k-=26
+                while 2*j+2>-1:
+                    letterB+=abc[(2*k+2)%26]
+                    j-=26
+                chart.add_series({
+                'name': S_variable[i],
+                'categories': "=Sheet1!$"+letterA+"$5:$"+letterA+"$"+str(len(X)+3),
+                'values':     "=Sheet1!$"+letterB+"$5:$"+letterB+"$"+str(len(X)+3),
+            })
+            chart.set_x_axis({'name': 'Pressure(bar)"'})
+            chart.set_y_axis({'name': 'Selectivity','major_gridlines': {'visible': False}})
+            worksheet.insert_chart('F2', chart)
+            workbook.close()
+        except:
+            pass
+        
     def open_file(self,Frame,name):
         """get access to a file path"""
         A=None
@@ -539,7 +645,8 @@ class IAST:
         Line4="click on done"
         Line5="when every datas are loaded, just enter each gas ratio. Keep in mind that the sum has to be 1"
         Line6="now you can plot and save your datas, be aware that the file_name can be the same and will erase previous files"
-        Line7="29 June 2022, program made by Ivan ARMAND at Ångström laboratory"
+        Line7="29 June 2022, program made by Ivan ARMAND during internship at Ångström laboratory"
+        url="https://github.com/ivanarma?tab=repositories"
         Nums=["1.","2.","3.","4.","5.","6.","date of the build/author"]
         Text=[Line1,Line2,Line3,Line4,Line5,Line6,Line7]
         lent=[len(l) for l in Text]
@@ -551,8 +658,17 @@ class IAST:
             tk.Label(lframe, text = Nums[line],fg='red',anchor="w").pack(side="left")
             tk.Label(lframe, text = Text[line],anchor="w").pack(side="right")
             lframe.pack()
+        lframe=tk.Frame(pan)
+        tk.Label(lframe,text="Please check my github page for more informations : ",foreground="DarkOrchid3",font= ('Aerial 18')).pack(side="left")
+        link=tk.Label(lframe,text=url,cursor= "hand2", foreground= "dodger blue",font= ('Aerial 18'))
+        link.bind("<Button-1>", lambda e:open_url(url))
+        link.pack(side="right")
+        lframe.pack()
         popup.mainloop()
-        
+
+def open_url(url):
+   webbrowser.open_new_tab(url)
+   
 def RMSE(Observed,Calculated):
     """Root mean square errors"""
     return np.sqrt(np.mean((Observed-Calculated)**2))
